@@ -693,6 +693,8 @@ function openForm(m){
     <form id="mForm">
       <div class="form-grid">
         <div class="fld full"><label>Merchant name <span class="req">*</span></label><input name="merchant_name" value="${v('merchant_name')}" required placeholder="e.g. Acme Retail"></div>
+        <div class="fld"><label>Brand name</label><input name="brand_name" value="${v('brand_name')}" placeholder="Public-facing brand"></div>
+        <div class="fld"><label>Wallet no</label><input name="wallet_no" value="${v('wallet_no')}" placeholder="e.g. 1805988058"></div>
         <div class="fld"><label>Industry / Category</label><input name="industry" value="${v('industry')}" placeholder="e.g. E-commerce, Food"></div>
         <div class="fld"><label>Category</label><select name="category">${catOpts}</select></div>
         <div class="fld"><label>Website</label><input name="website" value="${v('website')}" placeholder="example.com"></div>
@@ -703,6 +705,7 @@ function openForm(m){
         <div class="fld"><label>Stage</label><select name="stage">${stageOpts}</select></div>
         <div class="fld"><label>Priority</label><select name="priority">${priOpts}</select></div>
         <div class="fld"><label>Date sourced</label><input name="date_sourced" type="date" value="${v('date_sourced')}"></div>
+        <div class="fld"><label>Registration date</label><input name="registration_date" type="date" value="${v('registration_date')}"></div>
         <div class="fld full"><label>Notes</label><textarea name="notes" placeholder="Anything worth remembering…">${v('notes')}</textarea></div>
       </div>
       <div class="modal-actions">
@@ -741,8 +744,8 @@ document.addEventListener('keydown',e=>{ if(e.key==='Escape' && $('#overlay').cl
 /* ---------- export CSV ---------- */
 function exportCSV(){
   if(!MERCHANTS.length){ toast('Nothing to export',true); return; }
-  const cols = ['merchant_name','legal_name','category','stage','priority','industry','website','contact_person',
-    'contact_email','contact_phone','owner','lead_source','date_sourced','expected_go_live','favorite','notes','created_at'];
+  const cols = ['merchant_name','brand_name','wallet_no','legal_name','category','stage','priority','industry','website','contact_person',
+    'contact_email','contact_phone','owner','lead_source','date_sourced','registration_date','expected_go_live','favorite','notes','created_at'];
   const head = cols.join(',');
   const esc = v => { if(v==null) return ''; v=String(v); return /[",\n]/.test(v)?'"'+v.replace(/"/g,'""')+'"':v; };
   const rows = filtered().map(m=>cols.map(c=>esc(m[c])).join(','));
