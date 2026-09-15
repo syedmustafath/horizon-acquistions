@@ -172,6 +172,10 @@
   .pri-high{background:var(--pri-high-bg);color:var(--pri-high)}
   .pri-normal{background:var(--pri-normal-bg);color:var(--pri-normal)}
   .pri-low{background:var(--pri-low-bg);color:var(--pri-low)}
+  .warn-badge{display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;
+    border-radius:999px;background:#fff3d6;color:#c9860a;flex-shrink:0;cursor:help}
+  .incomplete-toggle{display:inline-flex;align-items:center;gap:6px;font-size:12.5px;color:var(--text)}
+  .incomplete-toggle.on{background:#fff3d6;border-color:#f0c05a;color:#a3690a}
   .card h3{font-size:14px;font-weight:640;letter-spacing:-.015em;line-height:1.28;margin-bottom:3px;
     display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
   .csub{font-size:11.5px;color:var(--hint);margin-bottom:9px;display:flex;flex-wrap:wrap;gap:5px;align-items:center}
@@ -242,6 +246,7 @@
   .fld.full{grid-column:1 / -1}
   .fld label{font-size:11.5px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.03em}
   .fld label .req{color:var(--danger)}
+  .fld label .qreq{color:#7c5cfc;font-weight:700;margin-left:3px;cursor:help}
   .fld input,.fld select,.fld textarea{font:inherit;font-size:13.5px;padding:10px 12px;border:1px solid var(--border-strong);
     border-radius:10px;background:var(--surface);color:var(--text);width:100%;transition:.14s}
   .fld input:focus,.fld select:focus,.fld textarea:focus{outline:none;border-color:var(--brand);box-shadow:0 0 0 3px rgba(15,163,115,.14)}
@@ -340,11 +345,11 @@
   <header class="top">
     <div>
       <h1>Merchant Acquisitions</h1>
-      <div class="sub" id="headSub">Track every merchant from checklist to live.</div>
+      <div class="sub" id="headSub">Track every lead from first contact to live.</div>
     </div>
     <button class="btn primary" id="addBtn">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
-      Add Merchant
+      Add Lead
     </button>
   </header>
 
@@ -375,6 +380,10 @@
       <option value="name">Name A–Z</option>
       <option value="golive">Go-live soonest</option>
     </select>
+    <button class="btn incomplete-toggle" id="fIncomplete" type="button" title="Show only cards missing mandatory qualification fields">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2 1 21h22L12 2zm0 6.5a1.15 1.15 0 0 1 1.15 1.25l-.35 5.1a.8.8 0 0 1-1.6 0l-.35-5.1A1.15 1.15 0 0 1 12 8.5zM12 18.6a1.35 1.35 0 1 1 0-2.7 1.35 1.35 0 0 1 0 2.7z"/></svg>
+      Incomplete only
+    </button>
   </div>
 
   <div class="live-dash" id="dash"></div>
@@ -394,6 +403,7 @@
    ============================================================ */
 
 const STAGES = [
+  { k:'Lead',                      c:'#64748b', bg:'#eef1f4' },
   { k:'Documents Checklist Sent', c:'#2f97ec', bg:'#e6f2fe' },
   { k:'Documents Received',       c:'#6a5cf0', bg:'#efedff' },
   { k:'Documents Reviewed',       c:'#e85d92', bg:'#fdeaf1' },
@@ -405,12 +415,30 @@ const STAGES = [
 const STAGE_KEYS = STAGES.map(s=>s.k);
 const stageMeta = k => STAGES.find(s=>s.k===k) || { k, c:'#888', bg:'#eee' };
 const PRIORITIES = ['urgent','high','normal','low'];
-const SHORT = { 'Documents Checklist Sent':'Checklist Sent','Documents Received':'Docs Received',
+const SHORT = { 'Lead':'Lead', 'Documents Checklist Sent':'Checklist Sent','Documents Received':'Docs Received',
   'Documents Reviewed':'Docs Reviewed','Sent for Activation':'Sent for Activation',
   'Registered':'Registered','Integration Started':'Integration','Live':'Live' };
+// Brand name is the primary display name (known from first contact at Lead stage);
+// merchant name is the registered legal identity, filled in once a lead qualifies.
+const dispName = m => (m.brand_name||'').trim() || (m.merchant_name||'').trim() || 'Untitled lead';
+// Fields that must be filled before a lead can qualify past the "Lead" stage.
+const QUAL_FIELDS = [
+  { k:'wallet_no',          label:'Wallet no' },
+  { k:'industry',           label:'Industry' },
+  { k:'category',           label:'Category' },
+  { k:'website',            label:'Website' },
+  { k:'contact_person',     label:'KCP' },
+  { k:'contact_phone',      label:'Phone' },
+  { k:'lead_source',        label:'Lead source' },
+  { k:'registration_date',  label:'Reg date' },
+  { k:'date_sourced',       label:'Date sourced' },
+];
+function missingQualFields(obj){
+  return QUAL_FIELDS.filter(f=>!(obj[f.k]||'').toString().trim()).map(f=>f.label);
+}
 
 let sb = null, USE_LOCAL = true, MERCHANTS = [];
-let FILTERS = { q:'', priority:'', owner:'', stage:'', sort:'recent' };
+let FILTERS = { q:'', priority:'', owner:'', stage:'', sort:'recent', incomplete:false };
 
 /* ---------- data layer (Supabase or localStorage) ---------- */
 const LS = {
@@ -459,14 +487,15 @@ function normalizePriority(p){ return PRIORITIES.includes((p||'').toLowerCase())
 function filtered(){
   let list = MERCHANTS.slice();
   const q = FILTERS.q.trim().toLowerCase();
-  if(q) list = list.filter(m => [m.merchant_name,m.legal_name,m.contact_person,m.contact_email,
-    m.industry,m.lead_source,m.owner,m.website].some(v=>(v||'').toLowerCase().includes(q)));
+  if(q) list = list.filter(m => [m.brand_name,m.merchant_name,m.legal_name,m.contact_person,m.contact_email,
+    m.industry,m.lead_source,m.owner,m.website,m.address].some(v=>(v||'').toLowerCase().includes(q)));
   if(FILTERS.priority) list = list.filter(m=>normalizePriority(m.priority)===FILTERS.priority);
   if(FILTERS.owner) list = list.filter(m=>(m.owner||'')===FILTERS.owner);
   if(FILTERS.stage) list = list.filter(m=>(m.stage||STAGE_KEYS[0])===FILTERS.stage);
+  if(FILTERS.incomplete) list = list.filter(m=>missingQualFields(m).length>0);
   const s = FILTERS.sort;
   list.sort((a,b)=>{
-    if(s==='name') return (a.merchant_name||'').localeCompare(b.merchant_name||'');
+    if(s==='name') return dispName(a).localeCompare(dispName(b));
     if(s==='oldest') return (a.created_at||'').localeCompare(b.created_at||'');
     if(s==='golive'){ const x=a.expected_go_live||'9999', y=b.expected_go_live||'9999'; return x.localeCompare(y); }
     return (b.created_at||'').localeCompare(a.created_at||'');
@@ -511,14 +540,20 @@ function cardHTML(m){
   const sub = [];
   if(m.industry) sub.push(`<span class="cchip">${esc(m.industry)}</span>`);
   if(m.website) sub.push(`<span class="cchip">${esc(m.website.replace(/^https?:\/\//,'').replace(/\/$/,''))}</span>`);
+  const missing = missingQualFields(m);
+  const incompleteBadge = missing.length
+    ? `<span class="warn-badge" title="Missing for qualification: ${esc(missing.join(', '))}">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2 1 21h22L12 2zm0 6.5a1.15 1.15 0 0 1 1.15 1.25l-.35 5.1a.8.8 0 0 1-1.6 0l-.35-5.1A1.15 1.15 0 0 1 12 8.5zM12 18.6a1.35 1.35 0 1 1 0-2.7 1.35 1.35 0 0 1 0 2.7z"/></svg>
+      </span>`
+    : '';
   return `<div class="card" data-id="${esc(m.id)}" style="--cat:${meta.c};--catbg:${meta.bg}">
     <div class="chead">
-      <div class="badges"><span class="pri pri-${pri}">${pri}</span></div>
+      <div class="badges"><span class="pri pri-${pri}">${pri}</span>${incompleteBadge}</div>
       <button class="star ${m.favorite?'on':''}" data-fav="${esc(m.id)}" title="Favorite">
         <svg viewBox="0 0 24 24" fill="${m.favorite?'currentColor':'none'}" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>
       </button>
     </div>
-    <h3>${esc(m.merchant_name||'Untitled merchant')}</h3>
+    <h3>${esc(dispName(m))}</h3>
     <div class="csub">${sub.join('') || '<span class="cchip" style="opacity:.6">No industry set</span>'}</div>
     ${m.contact_person?`<div class="cmeta"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-6 8-6s8 2 8 6"/></svg>${esc(m.contact_person)}</div>`:''}
     <div class="cmeta"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg><span class="cm-lbl">Go-live</span> ${esc(glTxt)}</div>
@@ -529,7 +564,7 @@ function cardHTML(m){
 function renderBoard(list){
   const board = $('#board');
   if(!MERCHANTS.length){
-    board.innerHTML = emptyState('No merchants yet','Add your first merchant to start tracking the pipeline.',true);
+    board.innerHTML = emptyState('No leads yet','Add your first lead to start tracking the pipeline.',true);
     wireEmpty(); return;
   }
   if(!list.length){
@@ -568,7 +603,7 @@ function emptyState(h,p,showAdd){
   return `<div class="empty">
     <svg width="52" height="52" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 10h18M8 2v4M16 2v4"/></svg>
     <h3>${esc(h)}</h3><div>${esc(p)}</div>
-    ${showAdd?'<div style="margin-top:16px"><button class="btn primary" id="emptyAdd">Add Merchant</button></div>':''}
+    ${showAdd?'<div style="margin-top:16px"><button class="btn primary" id="emptyAdd">Add Lead</button></div>':''}
   </div>`;
 }
 function wireEmpty(){ const b=$('#emptyAdd'); if(b) b.onclick=()=>openForm(); }
@@ -615,8 +650,8 @@ function openDetail(id){
       <span class="pri pri-${pri}">${pri}</span>
       ${m.favorite?'<span class="cat-tag" style="--cat:#b8860b;--catbg:#fdf3d6">★ Starred</span>':''}
     </div>
-    <h2>${esc(m.merchant_name||'Untitled merchant')}</h2>
-    <div class="msub">${m.legal_name?`<span>${esc(m.legal_name)}</span>`:'<span style="color:var(--hint)">No legal name</span>'}</div>
+    <h2>${esc(dispName(m))}</h2>
+    <div class="msub">${m.merchant_name?`<span>${esc(m.merchant_name)}</span>`:'<span style="color:var(--hint)">Not yet qualified — merchant name pending</span>'}</div>
 
     <div class="sec"><div class="sec-t">Pipeline stage</div><div class="life">${life}</div></div>
 
@@ -627,6 +662,7 @@ function openDetail(id){
         ${cell('Contact person', m.contact_person)}
         ${cell('Contact email', m.contact_email, 'mail')}
         ${cell('Contact phone', m.contact_phone)}
+        ${cell('Address', m.address)}
         ${cell('Owner / Rep', m.owner)}
       </div>
     </div>
@@ -644,7 +680,7 @@ function openDetail(id){
 
     <div class="modal-actions">
       <button class="btn danger grow" id="mDelete">Delete</button>
-      <button class="btn" id="mAdvance" ${idx>=STAGES.length-1?'disabled style="opacity:.5;cursor:default"':''}>Advance stage →</button>
+      <button class="btn" id="mAdvance" ${idx>=STAGES.length-1?'disabled style="opacity:.5;cursor:default"':''}>${idx===0?'Qualify →':'Advance stage →'}</button>
       <button class="btn primary" id="mEdit">Edit</button>
     </div>`;
   openOverlay();
@@ -654,6 +690,10 @@ function openDetail(id){
   const adv = $('#mAdvance');
   if(idx<STAGES.length-1) adv.onclick = async ()=>{
     const next = STAGE_KEYS[idx+1];
+    if(idx===0){
+      const missing = missingQualFields(m);
+      if(missing.length){ toast(`Complete these to qualify: ${missing.join(', ')}`,true); openForm(m); return; }
+    }
     try{ const u=await DB.update(m.id,{stage:next}); Object.assign(m,u); render(); openDetail(m.id); toast(`Moved to “${SHORT[next]||next}”`); }
     catch(e){ toast('Update failed: '+e.message,true); }
   };
@@ -663,7 +703,7 @@ function confirmDelete(m){
   $('#modal').innerHTML = `
     <button class="x" id="mClose"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
     <h2>Delete merchant?</h2>
-    <div class="msub">This permanently removes <b style="color:var(--text)">${esc(m.merchant_name||'this merchant')}</b> from the pipeline. This can't be undone.</div>
+    <div class="msub">This permanently removes <b style="color:var(--text)">${esc(dispName(m))}</b> from the pipeline. This can't be undone.</div>
     <div class="modal-actions">
       <button class="btn" id="cCancel">Cancel</button>
       <button class="btn danger" id="cConfirm">Delete permanently</button>
@@ -682,35 +722,43 @@ function openForm(m){
   const stageOpts = STAGES.map(s=>`<option value="${esc(s.k)}" ${((m.stage||STAGE_KEYS[0])===s.k)?'selected':''}>${esc(s.k)}</option>`).join('');
   const priOpts = PRIORITIES.map(p=>`<option value="${p}" ${(normalizePriority(m.priority)===p)?'selected':''}>${p[0].toUpperCase()+p.slice(1)}</option>`).join('');
   const v = k => esc(m[k]||'');
+  const req = isEdit ? '' : 'required';         // due-diligence fields only forced on new leads
+  const star = isEdit ? '' : ' <span class="req">*</span>';
+  const qreq = ' <span class="qreq" title="Required to qualify past Lead stage">●</span>';
   const CATEGORIES = ['Payment','Disbursement','Paybill'];
   const catOpts = ['<option value="">—</option>'].concat(
     CATEGORIES.map(c=>`<option value="${c}" ${((m.category||'')===c)?'selected':''}>${c}</option>`)
   ).join('');
   $('#modal').innerHTML = `
     <button class="x" id="mClose"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
-    <h2>${isEdit?'Edit merchant':'Add merchant'}</h2>
-    <div class="msub">${isEdit?'Update the details below.':'Enter what you know — you can fill the rest later.'}</div>
+    <h2>${isEdit?'Edit merchant':'Add Lead'}</h2>
+    <div class="msub">${isEdit?'Update the details below.':'Basic due-diligence details for a new lead.'}</div>
     <form id="mForm">
       <div class="form-grid">
-        <div class="fld full"><label>Merchant name <span class="req">*</span></label><input name="merchant_name" value="${v('merchant_name')}" required placeholder="e.g. Acme Retail"></div>
-        <div class="fld"><label>Brand name</label><input name="brand_name" value="${v('brand_name')}" placeholder="Public-facing brand"></div>
-        <div class="fld"><label>Wallet no</label><input name="wallet_no" value="${v('wallet_no')}" placeholder="e.g. 1805988058"></div>
-        <div class="fld"><label>Industry / Category</label><input name="industry" value="${v('industry')}" placeholder="e.g. E-commerce, Food"></div>
-        <div class="fld"><label>Category</label><select name="category">${catOpts}</select></div>
-        <div class="fld"><label>Website</label><input name="website" value="${v('website')}" placeholder="example.com"></div>
-        <div class="fld"><label>Key Contact Person</label><input name="contact_person" value="${v('contact_person')}" placeholder="Full name"></div>
-        <div class="fld"><label>Contact email</label><input name="contact_email" type="email" value="${v('contact_email')}" placeholder="name@company.com"></div>
-        <div class="fld"><label>Contact phone</label><input name="contact_phone" value="${v('contact_phone')}" placeholder="Phone"></div>
-        <div class="fld"><label>Lead source</label><input name="lead_source" value="${v('lead_source')}" placeholder="e.g. Referral, Inbound"></div>
+        <div class="fld full"><label>Brand name${star}</label><input name="brand_name" value="${v('brand_name')}" ${req} placeholder="Public-facing brand"></div>
+        <div class="fld"><label>Industry / Category${star}${qreq}</label><input name="industry" value="${v('industry')}" ${req} placeholder="e.g. E-commerce, Food"></div>
+        <div class="fld"><label>Website${star}${qreq}</label><input name="website" value="${v('website')}" ${req} placeholder="example.com"></div>
+        <div class="fld"><label>Key Contact Person${star}${qreq}</label><input name="contact_person" value="${v('contact_person')}" ${req} placeholder="Full name"></div>
+        <div class="fld"><label>Contact email${star}</label><input name="contact_email" type="email" value="${v('contact_email')}" ${req} placeholder="name@company.com"></div>
+        <div class="fld"><label>Contact phone${star}${qreq}</label><input name="contact_phone" value="${v('contact_phone')}" ${req} placeholder="Phone"></div>
+        <div class="fld"><label>Lead source${star}${qreq}</label><input name="lead_source" value="${v('lead_source')}" ${req} placeholder="e.g. Referral, Inbound"></div>
+        <div class="fld full"><label>Address${star}</label><input name="address" value="${v('address')}" ${req} placeholder="Street, area, city"></div>
+        <div class="fld full" style="border-top:1px solid var(--line);margin-top:2px;padding-top:14px">
+          <label style="color:var(--hint);font-size:11px">Qualification &amp; internal details — <span class="qreq" style="margin-left:0">●</span> marks fields required before this lead can qualify past Lead stage</label>
+        </div>
+        <div class="fld"><label>Merchant name</label><input name="merchant_name" value="${v('merchant_name')}" placeholder="Registered name once qualified"></div>
+        <div class="fld"><label>Wallet no${qreq}</label><input name="wallet_no" value="${v('wallet_no')}" placeholder="e.g. 1805988058"></div>
+        <div class="fld"><label>Category${qreq}</label><select name="category">${catOpts}</select></div>
+        <div class="fld"><label>Rate (%)</label><input name="rate" type="number" step="0.01" min="0" value="${v('rate')}" placeholder="e.g. 1.5"></div>
         <div class="fld"><label>Stage</label><select name="stage">${stageOpts}</select></div>
         <div class="fld"><label>Priority</label><select name="priority">${priOpts}</select></div>
-        <div class="fld"><label>Date sourced</label><input name="date_sourced" type="date" value="${v('date_sourced')}"></div>
-        <div class="fld"><label>Registration date</label><input name="registration_date" type="date" value="${v('registration_date')}"></div>
+        <div class="fld"><label>Date sourced${qreq}</label><input name="date_sourced" type="date" value="${v('date_sourced')}"></div>
+        <div class="fld"><label>Registration date${qreq}</label><input name="registration_date" type="date" value="${v('registration_date')}"></div>
         <div class="fld full"><label>Notes</label><textarea name="notes" placeholder="Anything worth remembering…">${v('notes')}</textarea></div>
       </div>
       <div class="modal-actions">
         <button type="button" class="btn" id="fCancel">Cancel</button>
-        <button type="submit" class="btn primary">${isEdit?'Save changes':'Add merchant'}</button>
+        <button type="submit" class="btn primary">${isEdit?'Save changes':'Add Lead'}</button>
       </div>
     </form>`;
   openOverlay();
@@ -720,19 +768,26 @@ function openForm(m){
     ev.preventDefault();
     const fd = new FormData(ev.target); const obj={};
     fd.forEach((val,k)=>{ obj[k] = (typeof val==='string' && val.trim()==='') ? null : val; });
-    obj.merchant_name = (obj.merchant_name||'').toString().trim();
-    if(!obj.merchant_name){ toast('Merchant name is required',true); return; }
+    obj.brand_name = (obj.brand_name||'').toString().trim();
+    if(!isEdit && !obj.brand_name){ toast('Brand name is required',true); return; }
+    if(!obj.brand_name && !(obj.merchant_name||'').toString().trim()){ toast('Brand name or merchant name is required',true); return; }
+    const finalStage = obj.stage || STAGE_KEYS[0];
+    if(finalStage !== 'Lead'){
+      const missing = missingQualFields(obj);
+      if(missing.length){ toast(`Complete these to qualify: ${missing.join(', ')}`,true); return; }
+    }
+    if(!isEdit){ obj.stage = obj.stage || STAGE_KEYS[0]; }
     obj.owner = obj.contact_person;      // Key Contact Person feeds owner (filter/sort/search)
     obj.legal_name = null;               // legal name no longer collected
     obj.favorite = isEdit ? !!m.favorite : false;
     const btn = ev.target.querySelector('button[type=submit]'); btn.disabled=true; btn.textContent='Saving…';
     try{
       if(isEdit){ const u=await DB.update(m.id,obj); const i=MERCHANTS.findIndex(x=>x.id===m.id); if(i>-1) MERCHANTS[i]={...MERCHANTS[i],...u}; toast('Changes saved'); }
-      else{ const c=await DB.create(obj); MERCHANTS.unshift(c); toast('Merchant added'); }
+      else{ const c=await DB.create(obj); MERCHANTS.unshift(c); toast('Lead added'); }
       render(); closeOverlay();
-    }catch(e){ btn.disabled=false; btn.textContent=isEdit?'Save changes':'Add merchant'; toast('Save failed: '+e.message,true); }
+    }catch(e){ btn.disabled=false; btn.textContent=isEdit?'Save changes':'Add Lead'; toast('Save failed: '+e.message,true); }
   };
-  setTimeout(()=>{ const f=$('#mForm [name=merchant_name]'); if(f) f.focus(); },50);
+  setTimeout(()=>{ const f=$('#mForm [name=brand_name]'); if(f) f.focus(); },50);
 }
 
 /* ---------- overlay ---------- */
@@ -744,8 +799,8 @@ document.addEventListener('keydown',e=>{ if(e.key==='Escape' && $('#overlay').cl
 /* ---------- export CSV ---------- */
 function exportCSV(){
   if(!MERCHANTS.length){ toast('Nothing to export',true); return; }
-  const cols = ['merchant_name','brand_name','wallet_no','legal_name','category','stage','priority','industry','website','contact_person',
-    'contact_email','contact_phone','owner','lead_source','date_sourced','registration_date','expected_go_live','favorite','notes','created_at'];
+  const cols = ['brand_name','merchant_name','wallet_no','legal_name','category','rate','stage','priority','industry','website','contact_person',
+    'contact_email','contact_phone','address','owner','lead_source','date_sourced','registration_date','expected_go_live','favorite','notes','created_at'];
   const head = cols.join(',');
   const esc = v => { if(v==null) return ''; v=String(v); return /[",\n]/.test(v)?'"'+v.replace(/"/g,'""')+'"':v; };
   const rows = filtered().map(m=>cols.map(c=>esc(m[c])).join(','));
@@ -780,6 +835,7 @@ $('#search').oninput = e=>{ clearTimeout(searchTimer); searchTimer=setTimeout(()
 $('#fPriority').onchange = e=>{ FILTERS.priority=e.target.value; render(); };
 $('#fOwner').onchange = e=>{ FILTERS.owner=e.target.value; render(); };
 $('#fSort').onchange = e=>{ FILTERS.sort=e.target.value; render(); };
+$('#fIncomplete').onclick = ()=>{ FILTERS.incomplete=!FILTERS.incomplete; $('#fIncomplete').classList.toggle('on',FILTERS.incomplete); render(); };
 
 /* ---------- passcode gate ---------- */
 function lock(){ sessionStorage.removeItem('horizon_auth'); $('#gate').style.display='flex'; document.body.classList.add('locked');
